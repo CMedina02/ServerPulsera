@@ -3,69 +3,56 @@ import datetime
 
 app = Flask(__name__)
 
-# --- CONFIGURACIÓN ---
-# Aquí registras las MACs de tus pulseras
+# REGISTRO DE PACIENTES
 directorio_pacientes = {
     "80:65:99:2B:25:94": "Paciente 1 - [TU NOMBRE]",
 }
 
 estado_actual = {}
 
-# --- DASHBOARD HTML ---
+# HTML DASHBOARD
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>🏥 Central de Monitoreo</title>
+    <title>🏥 Monitor Central</title>
     <meta http-equiv="refresh" content="2"> 
     <style>
-        body { font-family: 'Arial', sans-serif; background: #f4f6f7; padding: 20px; }
-        h1 { text-align: center; color: #34495e; }
-        .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
-        
+        body { font-family: sans-serif; background: #eaeff1; padding: 20px; }
+        .grid { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
         .card { 
-            background: white; width: 320px; border-radius: 12px; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow: hidden;
-            font-size: 1.1em;
+            background: white; width: 300px; padding: 20px; border-radius: 15px; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1); 
         }
+        .header { font-size: 1.2em; font-weight: bold; padding-bottom: 10px; border-bottom: 2px solid #eee; }
+        .row { display: flex; justify-content: space-between; margin: 10px 0; font-size: 1.1em; }
+        .status { text-align: center; padding: 8px; border-radius: 5px; color: white; font-weight: bold; margin-top: 15px; }
         
-        .card-header { padding: 15px; color: white; font-weight: bold; text-align: center; }
-        .card-body { padding: 20px; }
-        .dato { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-        .estado-msg { text-align: center; margin-top: 15px; padding: 10px; border-radius: 8px; font-weight: bold; }
-
-        /* COLORES DE ESTADO */
-        .gris  { background-color: #95a5a6; } /* Standby */
-        .verde { background-color: #27ae60; } /* Todo Bien */
-        .rojo  { background-color: #c0392b; animation: parpadeo 1s infinite; } /* Alerta */
-
-        @keyframes parpadeo { 0% {opacity: 1;} 50% {opacity: 0.8;} 100% {opacity: 1;} }
+        /* ESTADOS */
+        .gris { border-top: 8px solid #95a5a6; }
+        .verde { border-top: 8px solid #2ecc71; }
+        .rojo { border-top: 8px solid #e74c3c; background-color: #fdebd0; }
+        
+        .bg-gris { background-color: #95a5a6; }
+        .bg-verde { background-color: #2ecc71; }
+        .bg-rojo { background-color: #e74c3c; }
     </style>
 </head>
 <body>
-    <h1>🏥 Central de Monitoreo IOT</h1>
-    <div class="container">
+    <h1 style="text-align:center;">🏥 Monitor de Signos Vitales</h1>
+    <div class="grid">
         {% for mac, p in datos.items() %}
-        <div class="card">
-            <div class="card-header {{ p.color_css }}">
-                {{ p.nombre }}
-            </div>
-            <div class="card-body">
-                <div class="dato"><span>🌡️ Temperatura:</span> <strong>{{ p.temp }} °C</strong></div>
-                <div class="dato"><span>❤️ Ritmo Card.:</span> <strong>{{ p.ritmo }} BPM</strong></div>
-                <div class="dato"><span>💧 Oxígeno:</span> <strong>{{ p.oxigeno }} %</strong></div>
-                
-                <div class="estado-msg {{ p.color_css }}" style="color:white;">
-                    {{ p.mensaje }}
-                </div>
-                <div style="text-align:center; font-size:0.8em; color:#888; margin-top:10px;">
-                    MAC: {{ mac }} <br> Hora: {{ p.hora }}
-                </div>
-            </div>
+        <div class="card {{ p.clase }}">
+            <div class="header">{{ p.nombre }}</div>
+            <div class="row"><span>🌡️ Temp:</span> <strong>{{ p.temp }} °C</strong></div>
+            <div class="row"><span>❤️ Ritmo:</span> <strong>{{ p.ritmo }} BPM</strong></div>
+            <div class="row"><span>💧 SpO2:</span> <strong>{{ p.oxigeno }} %</strong></div>
+            <div class="status {{ p.bg }}"> {{ p.msg }} </div>
+            <div style="text-align:center; font-size:0.8em; color:#888; margin-top:5px;">MAC: {{ mac }}</div>
         </div>
         {% else %}
-            <h3>📡 Esperando conexión de dispositivos...</h3>
+            <h3>📡 Esperando datos...</h3>
         {% endfor %}
     </div>
 </body>
@@ -84,55 +71,41 @@ def recibir_datos():
     spo2 = int(data.get('oxigeno', 0))
     temp = float(data.get('temperatura', 0.0))
     
-    nombre = directorio_pacientes.get(mac, "Paciente Desconocido")
+    nombre = directorio_pacientes.get(mac, "Desconocido")
     
-    # --- LÓGICA DE DIAGNÓSTICO ---
+    # --- LÓGICA DE ESTADOS ---
     alerta = False
-    mensaje = "SIN LECTURA"
-    color_css = "gris"
+    msg = "💤 STANDBY"
+    clase = "gris"
+    bg = "bg-gris"
 
-    # 1. ¿Hay alguien conectado? (Si todo es 0, es Standby)
+    # ¿Hay lecturas válidas? (Al menos temperatura de piel o pulso)
     if ritmo > 0 or spo2 > 0 or temp > 25.0:
         
-        # 2. Análisis de Signos Vitales
         fallos = []
-        
-        # Temperatura (Aceptamos entre 33 y 37.8 como normal en muñeca)
+        # Rangos tolerantes para muñeca
         if temp > 37.8: fallos.append("FIEBRE")
         if temp < 33.0: fallos.append("HIPOTERMIA") 
-
-        # Ritmo Cardiaco
         if ritmo > 120: fallos.append("TAQUICARDIA")
-        if ritmo < 50: fallos.append("BRADICARDIA")
+        if ritmo < 50 and ritmo > 0: fallos.append("BRADICARDIA")
+        if spo2 < 90 and spo2 > 0: fallos.append("BAJO O2")
 
-        # Oxigenación
-        if spo2 < 90: fallos.append("HIPOXIA")
-
-        # 3. Decisión Final
         if len(fallos) > 0:
             alerta = True
-            mensaje = "⚠️ ALERTA: " + ", ".join(fallos)
-            color_css = "rojo"
+            msg = "⚠️ " + ", ".join(fallos)
+            clase = "rojo"
+            bg = "bg-rojo"
         else:
-            alerta = False
-            mensaje = "✅ ESTABLE"
-            color_css = "verde"
+            msg = "✅ ESTABLE"
+            clase = "verde"
+            bg = "bg-verde"
             
-    else:
-        # Modo Standby (Sensores en 0)
-        mensaje = "💤 ESPERANDO..."
-        color_css = "gris"
-        alerta = False
-
-    # Guardar estado
     estado_actual[mac] = {
         "nombre": nombre, "ritmo": ritmo, "oxigeno": spo2, "temp": temp,
-        "alerta": alerta, "mensaje": mensaje, "color_css": color_css,
-        "hora": datetime.datetime.now().strftime("%H:%M:%S")
+        "msg": msg, "clase": clase, "bg": bg
     }
     
-    print(f"[{mac}] {mensaje} | T:{temp}")
-    
+    print(f"[{mac}] {msg} | T:{temp}")
     return jsonify({"status": "ok", "alerta_activa": alerta})
 
 if __name__ == '__main__':
