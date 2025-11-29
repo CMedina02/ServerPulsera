@@ -3,8 +3,8 @@ import datetime
 
 app = Flask(__name__)
 
-# --- REGISTRO DE PACIENTES ---
-# Asegúrate que la MAC coincida con lo que imprime el monitor serial de Arduino
+# --- CONFIGURACIÓN ---
+# Aquí registras las MACs de tus pulseras
 directorio_pacientes = {
     "80:65:99:2B:25:94": "Paciente 1 - [TU NOMBRE]",
 }
@@ -17,60 +17,55 @@ HTML_TEMPLATE = """
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>🏥 Monitor de Albergue</title>
+    <title>🏥 Central de Monitoreo</title>
     <meta http-equiv="refresh" content="2"> 
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #eaeff1; padding: 20px; }
-        h1 { text-align: center; color: #2c3e50; }
-        .grid { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
+        body { font-family: 'Arial', sans-serif; background: #f4f6f7; padding: 20px; }
+        h1 { text-align: center; color: #34495e; }
+        .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
         
         .card { 
-            background: white; width: 300px; padding: 20px; border-radius: 15px; 
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1); 
-            transition: transform 0.2s;
+            background: white; width: 320px; border-radius: 12px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); overflow: hidden;
+            font-size: 1.1em;
         }
         
-        /* ESTADOS VISUALES */
-        .standby { border-top: 10px solid #95a5a6; } /* GRIS */
-        .normal  { border-top: 10px solid #2ecc71; } /* VERDE */
-        .peligro { border-top: 10px solid #e74c3c; background-color: #fadbd8; } /* ROJO */
+        .card-header { padding: 15px; color: white; font-weight: bold; text-align: center; }
+        .card-body { padding: 20px; }
+        .dato { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .estado-msg { text-align: center; margin-top: 15px; padding: 10px; border-radius: 8px; font-weight: bold; }
 
-        .header { font-size: 1.2em; font-weight: bold; border-bottom: 2px solid #ddd; padding-bottom: 10px; margin-bottom: 10px;}
-        .row { display: flex; justify-content: space-between; margin: 8px 0; font-size: 1.1em; }
-        
-        .badge { padding: 5px 10px; border-radius: 5px; color: white; font-weight: bold; text-align: center; margin-top: 15px;}
-        .bg-gray { background-color: #95a5a6; }
-        .bg-green { background-color: #2ecc71; }
-        .bg-red { background-color: #e74c3c; }
+        /* COLORES DE ESTADO */
+        .gris  { background-color: #95a5a6; } /* Standby */
+        .verde { background-color: #27ae60; } /* Todo Bien */
+        .rojo  { background-color: #c0392b; animation: parpadeo 1s infinite; } /* Alerta */
+
+        @keyframes parpadeo { 0% {opacity: 1;} 50% {opacity: 0.8;} 100% {opacity: 1;} }
     </style>
 </head>
 <body>
-    <h1>🏥 Monitor de Signos Vitales</h1>
-    <div class="grid">
+    <h1>🏥 Central de Monitoreo IOT</h1>
+    <div class="container">
         {% for mac, p in datos.items() %}
-        
-        <div class="card {{ p.clase_css }}">
-            <div class="header">
-                {{ p.nombre }}<br>
-                <span style="font-size:0.7em; color:#555;">ID: {{ mac }}</span>
+        <div class="card">
+            <div class="card-header {{ p.color_css }}">
+                {{ p.nombre }}
             </div>
-            
-            <div class="row"><span>🌡️ Temp:</span> <strong>{{ p.temp }} °C</strong></div>
-            <div class="row"><span>❤️ Ritmo:</span> <strong>{{ p.ritmo }} BPM</strong></div>
-            <div class="row"><span>💧 SpO2:</span> <strong>{{ p.oxigeno }} %</strong></div>
-
-            <div class="badge {{ p.badge_css }}">
-                {{ p.texto_estado }}
-            </div>
-            <div style="text-align:center; font-size:0.8em; color:#777; margin-top:5px;">
-                Última act: {{ p.hora }}
+            <div class="card-body">
+                <div class="dato"><span>🌡️ Temperatura:</span> <strong>{{ p.temp }} °C</strong></div>
+                <div class="dato"><span>❤️ Ritmo Card.:</span> <strong>{{ p.ritmo }} BPM</strong></div>
+                <div class="dato"><span>💧 Oxígeno:</span> <strong>{{ p.oxigeno }} %</strong></div>
+                
+                <div class="estado-msg {{ p.color_css }}" style="color:white;">
+                    {{ p.mensaje }}
+                </div>
+                <div style="text-align:center; font-size:0.8em; color:#888; margin-top:10px;">
+                    MAC: {{ mac }} <br> Hora: {{ p.hora }}
+                </div>
             </div>
         </div>
-
         {% else %}
-            <p style="text-align:center; margin-top:50px; font-size:1.5em; color:#7f8c8d;">
-                📡 Esperando conexión de pulseras...
-            </p>
+            <h3>📡 Esperando conexión de dispositivos...</h3>
         {% endfor %}
     </div>
 </body>
@@ -85,71 +80,60 @@ def dashboard():
 def recibir_datos():
     data = request.json
     mac = data.get('mac')
-    # Recibimos los datos (que ya vienen limpios desde Arduino, si son 0 es que no hay lectura)
     ritmo = int(data.get('ritmo', 0))
     spo2 = int(data.get('oxigeno', 0))
     temp = float(data.get('temperatura', 0.0))
     
     nombre = directorio_pacientes.get(mac, "Paciente Desconocido")
     
-    # --- LOGICA DE ALERTA MEJORADA ---
+    # --- LÓGICA DE DIAGNÓSTICO ---
     alerta = False
-    estado_texto = "SIN DATOS"
-    clase_css = "standby"
-    badge_css = "bg-gray"
+    mensaje = "SIN LECTURA"
+    color_css = "gris"
 
-    # Caso 1: Lecturas válidas detectadas (No son cero)
-    if ritmo > 0 or spo2 > 0:
-        # Asumimos estado normal primero
-        estado_texto = "ESTABLE"
-        clase_css = "normal"
-        badge_css = "bg-green"
+    # 1. ¿Hay alguien conectado? (Si todo es 0, es Standby)
+    if ritmo > 0 or spo2 > 0 or temp > 25.0:
         
-        # Chequeo de Anomalías (Solo si tenemos datos reales)
-        motivo_alerta = []
+        # 2. Análisis de Signos Vitales
+        fallos = []
         
-        # Fiebre o Hipotermia (Validamos que temp no sea 0 para no alertar por desconexión)
-        if temp > 37.5: motivo_alerta.append("FIEBRE")
-        if temp < 35.0 and temp > 10.0: motivo_alerta.append("BAJA TEMP")
-        
-        # Taquicardia o Bradicardia
-        if ritmo > 120: motivo_alerta.append("TAQUICARDIA")
-        if ritmo < 50: motivo_alerta.append("BRADICARDIA")
-        
-        # Hipoxia
-        if spo2 < 90: motivo_alerta.append("BAJO OXIGENO")
+        # Temperatura (Aceptamos entre 33 y 37.8 como normal en muñeca)
+        if temp > 37.8: fallos.append("FIEBRE")
+        if temp < 33.0: fallos.append("HIPOTERMIA") 
 
-        # Si hubo algún motivo, activamos la alerta roja
-        if len(motivo_alerta) > 0:
+        # Ritmo Cardiaco
+        if ritmo > 120: fallos.append("TAQUICARDIA")
+        if ritmo < 50: fallos.append("BRADICARDIA")
+
+        # Oxigenación
+        if spo2 < 90: fallos.append("HIPOXIA")
+
+        # 3. Decisión Final
+        if len(fallos) > 0:
             alerta = True
-            estado_texto = "⚠️ ALERTA: " + ", ".join(motivo_alerta)
-            clase_css = "peligro"
-            badge_css = "bg-red"
-
+            mensaje = "⚠️ ALERTA: " + ", ".join(fallos)
+            color_css = "rojo"
+        else:
+            alerta = False
+            mensaje = "✅ ESTABLE"
+            color_css = "verde"
+            
     else:
-        # Caso 2: Todo es cero
-        estado_texto = "ESPERANDO PACIENTE..."
-        clase_css = "standby"
-        badge_css = "bg-gray"
+        # Modo Standby (Sensores en 0)
+        mensaje = "💤 ESPERANDO..."
+        color_css = "gris"
+        alerta = False
 
-    # Guardamos en la memoria del servidor
+    # Guardar estado
     estado_actual[mac] = {
-        "nombre": nombre,
-        "ritmo": ritmo,
-        "oxigeno": spo2,
-        "temp": round(temp, 1),
-        "alerta": alerta,
-        "texto_estado": estado_texto,
-        "clase_css": clase_css,
-        "badge_css": badge_css,
+        "nombre": nombre, "ritmo": ritmo, "oxigeno": spo2, "temp": temp,
+        "alerta": alerta, "mensaje": mensaje, "color_css": color_css,
         "hora": datetime.datetime.now().strftime("%H:%M:%S")
     }
     
-    print(f"📥 {nombre} -> {estado_texto} | T:{temp} HR:{ritmo}")
+    print(f"[{mac}] {mensaje} | T:{temp}")
     
-    # Devolvemos la orden al ESP32 (si alerta=True, la pulsera pita/prende rojo)
     return jsonify({"status": "ok", "alerta_activa": alerta})
 
 if __name__ == '__main__':
-    # host='0.0.0.0' permite que otras PCs en la red vean la página
     app.run(host='0.0.0.0', port=5000, debug=True)
